@@ -519,6 +519,81 @@ if ( isset($_REQUEST['need_html']) && $_REQUEST['need_html'] == 'true' ) {
 	}
 }
 
+//  JSON формат (краткий)
+if (isset($_REQUEST['need_json']) && $_REQUEST['need_json'] == 'true') {
+    $query = "SELECT count(*) FROM $db_table_name $where LIMIT $result_limit";
+
+    try {
+        $sth = $dbh->query($query);
+    } catch (PDOException $e) {
+        print $e->getMessage();
+    }
+
+    if (!$sth) {
+        echo "\nPDO::errorInfo():\n";
+        print_r($dbh->errorInfo());
+    } else {
+        $tot_calls_raw = $sth->fetchColumn();
+        $sth = null;
+    }
+
+    if (isset($tot_calls_raw) && $tot_calls_raw) {
+
+        $i = Config::get('display.main.header_step') - 1;
+
+        try {
+
+            $query = "SELECT *, unix_timestamp(calldate) as call_timestamp FROM $db_table_name $where $order $sort LIMIT $result_limit";
+            $sth = $dbh->query($query);
+            if (!$sth) {
+                echo "\nPDO::errorInfo():\n";
+                print_r($dbh->errorInfo());
+            }
+
+            $rawresult = $sth->fetchAll(PDO::FETCH_ASSOC);
+            $filtered_count = 0;
+            # Удаление дублирующихся записей в Asterisk 13
+            if (Config::get('display.main.duphide') == 1) {
+                foreach ($rawresult as $val) {
+                    $superresult[$val['uniqueid'] . '-' . $val['disposition']] = $val;
+                }
+                foreach ($superresult as $val) {
+                    if (
+                        in_array($val['disposition'], ['ANSWERED', 'NORMAL_CLEARING', 'NORMAL_UNSPECIFIED'])
+                        && array_key_exists($val['uniqueid'] . '-' . 'NO ANSWER', $superresult)
+                    ) {
+                        unset ($superresult[$val['uniqueid'] . '-' . 'NO ANSWER']);
+                    }
+                }
+                $filtered_count = count($rawresult) - count($superresult);
+            } else {
+                $superresult = $rawresult;
+            }
+
+            foreach ($superresult as $key => $row) {
+                $file_params = getFileParams($row);
+
+                $json[] = [
+                    'type'     => empty($row['src']) ? 'out' : 'in',
+                    'datetime' => strtotime($row['calldate']),
+                    'answered' => $row['disposition'] === 'ANSWERED',
+                    'file'     => (isset($file_params['path']) && !empty($file_params['path'])) ? $file_params['path'] : '',
+                    'duration' => sprintf('%02d', intval($row['duration'] / 60)) . ':' . sprintf('%02d', intval($row['duration'] % 60)),
+                ];
+            }
+        } catch (PDOException $e) {
+            print $e->getMessage();
+        }
+
+        header('Content-Type: application/json');
+        header('Status: 200');
+
+        echo json_encode(isset($json) ? $json : [], JSON_PRETTY_PRINT);
+
+        exit;
+    }
+}
+
 // NEW GRAPHS
 $group_by_field = $group;
 // ConcurrentCalls
